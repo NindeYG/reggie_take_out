@@ -1,7 +1,10 @@
 package com.itheima.reggie.controller;
 
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.google.gson.JsonObject;
 import com.itheima.reggie.Entity.Category;
 import com.itheima.reggie.Entity.Dish;
 import com.itheima.reggie.Entity.DishFlavor;
@@ -11,11 +14,14 @@ import com.itheima.reggie.service.CategoryService;
 import com.itheima.reggie.service.DishFlavorService;
 import com.itheima.reggie.service.DishService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.asm.TypeReference;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @RestController
@@ -30,12 +36,18 @@ public class DishController {
     private CategoryService categoryService;
 
     @Autowired
+    private StringRedisTemplate redisTemplate;
+
+    @Autowired
     private DishFlavorService dishFlavorService;
 
     @PostMapping
     public R<String> save(@RequestBody DishDto dishDto){
         log.info(dishDto.toString());
         dishService.saveWithFlavor(dishDto);
+        //新增成功后需要清理当前类别的缓存
+        String key = "dish_"+dishDto.getCategoryId()+" "+dishDto.getStatus();
+        redisTemplate.delete(key);
         return R.success("新增菜品成功！");
     }
 
@@ -79,6 +91,9 @@ public class DishController {
     @PutMapping
     public R<String> update(@RequestBody DishDto dishDto){
         dishService.updateByIdWithFlavor(dishDto);
+        //更新成功后需要清除缓存
+        String key = "dish_"+dishDto.getCategoryId()+" "+dishDto.getStatus();
+        redisTemplate.delete(key);
         return R.success("更新成功！");
     }
 
@@ -95,12 +110,23 @@ public class DishController {
 
     @GetMapping("/list")
     public R<List<DishDto>> listWithFlavor(Dish dish){
+        //构造key
+        String key = "dish_" + dish.getCategoryId()+" " +dish.getStatus();
+        //从redis中获取缓存数据
+        String s = redisTemplate.opsForValue().get(key);//从redis中获取的就是Json格式的字符串
+        List<DishDto> dishDtoList = JSONObject.parseArray(s, DishDto.class);//将Json字符串反序列化为List
+        //如果存在，直接返回，无需查询
+        if(dishDtoList != null){
+
+            return R.success(dishDtoList);
+        }
+        //如果不存在，执行查询操作，从sql数据库中获取数据
         Long categoryId=dish.getCategoryId();
         LambdaQueryWrapper<Dish> lambdaQueryWrapper=new LambdaQueryWrapper<>();
         lambdaQueryWrapper.eq(dish.getCategoryId()!=null,Dish::getCategoryId,categoryId);
         lambdaQueryWrapper.orderByDesc(Dish::getSort).orderByDesc(Dish::getUpdateTime);
         List<Dish> dishList = dishService.list(lambdaQueryWrapper);
-        List<DishDto> dishDtoList = dishList.stream().map((item)->{
+        dishDtoList = dishList.stream().map((item)->{
             DishDto dishDto = new DishDto();
             //拷贝基本信息
             BeanUtils.copyProperties(item,dishDto);
@@ -113,6 +139,9 @@ public class DishController {
             dishDto.setFlavors(dishFlavors);
             return dishDto;
         }).collect(Collectors.toList());
+
+        //将获取到的数据存入redis中
+        redisTemplate.opsForValue().set(key,JSON.toJSON(dishDtoList).toString(),60, TimeUnit.MINUTES);
         return R.success(dishDtoList);
     }
 }
