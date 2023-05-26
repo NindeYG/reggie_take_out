@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.asm.TypeReference;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -81,6 +82,8 @@ public class DishController {
         page2.setRecords(list);
         return R.success(page2);
     }
+
+
 
     @GetMapping("/{id}")
     public R<DishDto> get(@PathVariable Long id){
